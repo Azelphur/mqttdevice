@@ -146,12 +146,12 @@ class Button(EntityWithMessage, ABC):
     def publish_discovery(self):
         super().publish_discovery()
         topic = self.get_topic()
-        self.client.subscribe(f"{topic}/set")
+        self._mqttdevice.client.subscribe(f"{topic}/set")
 
     def get_publish_payload(self):
         topic = self.get_topic()
         return {
-            "name": f"{self._mqttdevice.args.device_name}_{self.name}",
+            "name": f"{self._mqttdevice.get_device_name()}_{self.name}",
             "command_topic": f"{topic}/set",
         }
 
