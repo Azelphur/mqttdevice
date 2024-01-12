@@ -7,20 +7,11 @@ import asyncio
 import logging
 import sys
 import subprocess
+import yaml
 from types import ModuleType
 from socket import gethostname
 
 logger = logging.getLogger(__name__)
-
-
-class Args(Protocol):
-    device_name: str
-    mqtt_host: str
-    mqtt_port: int
-    mqtt_username: str
-    mqtt_password: str
-    discovery_prefix: str
-    plugins: str
 
 
 class WillAlreadySetError(Exception):
@@ -28,26 +19,27 @@ class WillAlreadySetError(Exception):
 
 
 class MQTTDevice:
-    def __init__(self, args):
-        self.args: Args = args
+    def __init__(self, config: dict):
+        self.config = config
         self.last_will = False
-        if not args.plugins:
-            logger.error("No plugins specified, nothing to do, exiting")
-            sys.exit(1)
         self.entity_classes: dict[str, Entity] = dict()
-        self.client: mqtt.Client = mqtt.Client(self.args.device_name)
-        for plugin in args.plugins.split(","):
+        self.client: mqtt.Client = mqtt.Client(self.get_device_name())
+        for plugin, plugin_config in config["plugins"].items():
             try:
                 plugin_module = importlib.import_module(f"plugins.{plugin}")
             except ModuleNotFoundError:
                 logger.error(f"No such plugin {plugin}")
                 sys.exit(1)
-            plugin_instance = plugin_module.setup(self)
-        self.client.username_pw_set(self.args.mqtt_username, self.args.mqtt_password)
+            plugin_instance = plugin_module.setup(self, plugin_config)
+        self.client.username_pw_set(
+            self.config["mqtt_username"], self.config["mqtt_password"]
+        )
         self.client.on_connect = self.on_connect
         self.client.on_message = self.on_message
         self.client.on_disconnect = self.on_disconnect
-        self.client.connect(self.args.mqtt_host, self.args.mqtt_port)
+        self.client.connect(
+            self.config["mqtt_host"], self.config.get("mqtt_port", 1883)
+        )
 
     def register_plugin(self, instance):
         instance.plugin_init(self)
@@ -68,8 +60,14 @@ class MQTTDevice:
 
     def on_disconnect(self, client, userdata, rc):
         self.plugins[
-            f"{self.args.discovery_prefix}/binary_sensor/{self.args.device_name}_available"
+            f"{self.get_discovery_prefix()}/binary_sensor/{self.args.device_name}_available"
         ].publish_state()
+
+    def get_discovery_prefix(self):
+        return self.config.get("discovery_prefix", "homeassistant")
+
+    def get_device_name(self):
+        return self.config.get("device_name", gethostname())
 
     def publish_discovery(self):
         for entity in self.entity_classes.values():
@@ -104,12 +102,12 @@ class Entity(ABC):
         )
 
     def get_topic(self):
-        return f"{self._mqttdevice.args.discovery_prefix}/{self.domain}/{self._mqttdevice.args.device_name}_{self.name}"
+        return f"{self._mqttdevice.get_discovery_prefix()}/{self.domain}/{self._mqttdevice.get_device_name()}_{self.name}"
 
     def get_publish_payload(self):
         topic = self.get_topic()
         return {
-            "name": f"{self._mqttdevice.args.device_name}_{self.name}",
+            "name": f"{self._mqttdevice.get_device_name()}_{self.name}",
             "state_topic": f"{topic}/state",
         }
 
@@ -162,13 +160,14 @@ if __name__ == "__main__":
     import argparse
 
     parser = argparse.ArgumentParser()
-    parser.add_argument("--device_name", default=gethostname())
-    parser.add_argument("--mqtt-host")
-    parser.add_argument("--mqtt-port", type=int, default=1883, required=False)
-    parser.add_argument("--mqtt-username")
-    parser.add_argument("--mqtt-password")
-    parser.add_argument("--discovery_prefix", default="homeassistant", required=False)
-    parser.add_argument("--plugins", default="", required=False)
+    parser.add_argument(
+        "--config",
+        default="./config.yaml",
+        help="Config file",
+        type=argparse.FileType("r"),
+        required=False,
+    )
     args = parser.parse_args()
-    m = MQTTDevice(args)
+    config = yaml.safe_load(args.config)
+    m = MQTTDevice(config)
     m.loop_forever()
