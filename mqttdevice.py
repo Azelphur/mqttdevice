@@ -21,6 +21,7 @@ class WillAlreadySetError(Exception):
 class MQTTDevice:
     def __init__(self, config: dict):
         self.config = config
+        self.connected = False
         self.last_will = False
         self.entity_classes: dict[str, Entity] = dict()
         self.client: mqtt.Client = mqtt.Client(self.get_device_name())
@@ -55,13 +56,13 @@ class MQTTDevice:
         self.last_will = True
 
     def on_connect(self, client, userdata, flags, rc):
+        self.connected = True
         self.publish_discovery()
         self.publish_state()
 
     def on_disconnect(self, client, userdata, rc):
-        self.plugins[
-            f"{self.get_discovery_prefix()}/binary_sensor/{self.args.device_name}_available"
-        ].publish_state()
+        self.connected = False
+        self.publish_state()
 
     def get_discovery_prefix(self):
         return self.config.get("discovery_prefix", "homeassistant")
