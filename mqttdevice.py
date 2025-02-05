@@ -9,6 +9,7 @@ import paho.mqtt.client as mqtt
 import logging
 import sys
 import yaml
+import uuid
 from socket import gethostname
 
 if typing.TYPE_CHECKING:
@@ -78,6 +79,12 @@ class MQTTDevice:
     def get_device_name(self):
         return self.config.get("device_name", gethostname())
 
+    def get_device_metadata(self):
+        return {
+            "ids": [gethostname(), uuid.getnode()],
+            "name": self.get_device_name(),
+        }
+
     def publish_discovery(self):
         for entity in self.entity_classes.values():
             entity.publish_discovery()
@@ -131,9 +138,11 @@ class Entity(ABC):
 
     def get_publish_payload(self):
         topic = self.get_topic()
+
         return {
-            "name": f"{self.mqttdevice.get_device_name()}_{self.name}",
-            "state_topic": f"{topic}/state",
+            "uniq_id": self.name,
+            "stat_t": f"{topic}/state",
+            "dev": self.mqttdevice.get_device_metadata(),
         }
 
 
@@ -192,8 +201,7 @@ if __name__ == "__main__":
         type=argparse.FileType("r"),
         required=False,
     )
-    parser.add_argument('-v', '--verbose',
-                    action='store_true')
+    parser.add_argument("-v", "--verbose", action="store_true")
     args = parser.parse_args()
     if args.verbose:
         logger.setLevel(logging.DEBUG)
