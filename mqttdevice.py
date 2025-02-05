@@ -12,10 +12,12 @@ import yaml
 import uuid
 from socket import gethostname
 
+from homeassistant.components.binary_sensor import BinarySensorDeviceClass
+
 if typing.TYPE_CHECKING:
     from plugins.commands import Plugin
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("mqttdevice")
 logging.basicConfig(level=logging.INFO)
 
 
@@ -96,7 +98,7 @@ class MQTTDevice:
                 logger.debug(f"Published state for {topic}")
 
     def on_message(self, client, userdata, msg):
-        print("Message received-> " + msg.topic + " " + str(msg.payload))
+        logger.info("Message received-> " + msg.topic + " " + str(msg.payload))
         payload = msg.payload.decode("utf-8")
         topic = msg.topic[:-4]
         if topic not in self.entity_classes:
@@ -108,6 +110,9 @@ class MQTTDevice:
 class Entity(ABC):
     name: ClassVar[str]
     domain: ClassVar[str]
+    device_class: ClassVar[str | None] = None
+    unit_of_measurement: ClassVar[str | None] = None
+
     _mqttdevice: MQTTDevice
 
     @classmethod
@@ -139,11 +144,21 @@ class Entity(ABC):
     def get_publish_payload(self):
         topic = self.get_topic()
 
-        return {
+        payload = {
             "uniq_id": self.name,
-            "stat_t": f"{topic}/state",
+            "state_topic": f"{topic}/state",
             "dev": self.mqttdevice.get_device_metadata(),
+            "o": {
+                "name": "MQTTDevice",
+                "url": "https://github.com/Azelphur/mqttdevice",
+            },
         }
+        if self.device_class:
+            payload["device_class"] = self.device_class
+        if self.unit_of_measurement:
+            payload["unit_of_measurement"] = self.unit_of_measurement
+        logger.debug(f"Generated payload for {topic}: {payload}")
+        return payload
 
 
 class EntityWithState(Entity):
@@ -165,13 +180,15 @@ class EntityWithMessage(Entity):
 class BinarySensor(EntityWithState, ABC):
     name = None
     domain = "binary_sensor"
+    device_class: ClassVar[BinarySensorDeviceClass]
 
     def publish_state(self):
         topic = self.get_topic()
+        payload = {"state": "ON" if self.get_state() else "OFF"}
         self.mqttdevice.client.publish(
-            f"{topic}/state", "ON" if self.get_state() else "OFF", retain=True
+            f"{topic}/state", json.dumps(payload), retain=True
         )
-
+        logger.debug(f"Generated payload for {topic}: {payload}")
 
 class Button(EntityWithMessage, ABC):
     name = None
@@ -205,6 +222,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
     if args.verbose:
         logger.setLevel(logging.DEBUG)
+
     config = yaml.safe_load(args.config)
     m = MQTTDevice(config)
     m.loop_forever()
