@@ -1,14 +1,11 @@
 from abc import ABC, abstractmethod
-from typing import Any, ClassVar, Protocol
+from typing import Any, ClassVar
 import importlib
 import json
 import paho.mqtt.client as mqtt
-import asyncio
 import logging
 import sys
-import subprocess
 import yaml
-from types import ModuleType
 from socket import gethostname
 
 logger = logging.getLogger(__name__)
@@ -31,7 +28,7 @@ class MQTTDevice:
             except ModuleNotFoundError:
                 logger.error(f"No such plugin {plugin}")
                 sys.exit(1)
-            plugin_instance = plugin_module.setup(self, plugin_config)
+            plugin_module.setup(self, plugin_config)
         self.client.username_pw_set(
             self.config["mqtt_username"], self.config["mqtt_password"]
         )

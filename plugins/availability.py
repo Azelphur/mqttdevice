@@ -1,5 +1,4 @@
 from mqttdevice import BinarySensor, MQTTDevice
-import logging
 
 
 class Plugin(BinarySensor):
