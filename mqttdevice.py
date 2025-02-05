@@ -1,14 +1,21 @@
+from __future__ import annotations
+
 from abc import ABC, abstractmethod
 from typing import Any, ClassVar
 import importlib
 import json
+import typing
 import paho.mqtt.client as mqtt
 import logging
 import sys
 import yaml
 from socket import gethostname
 
+if typing.TYPE_CHECKING:
+    from plugins.commands import Plugin
+
 logger = logging.getLogger(__name__)
+logging.basicConfig(level=logging.INFO)
 
 
 class WillAlreadySetError(Exception):
@@ -17,6 +24,8 @@ class WillAlreadySetError(Exception):
 
 class MQTTDevice:
     def __init__(self, config: dict):
+        logger.info("Starting MQTT Device")
+
         self.config = config
         self.connected = False
         self.last_will = False
@@ -39,14 +48,16 @@ class MQTTDevice:
             self.config["mqtt_host"], self.config.get("mqtt_port", 1883)
         )
 
-    def register_plugin(self, instance):
-        instance.plugin_init(self)
+    def register_plugin(self, instance: Plugin):
+        instance.initialize_plugin(self)
         self.entity_classes[instance.get_topic()] = instance
+        logger.info(f"Registered plugin {instance.get_topic()}")
 
     def loop_forever(self):
+        logger.info("Starting loop")
         self.client.loop_forever()
 
-    def will_set(self, plugin, state):
+    def will_set(self, plugin: Plugin, state):
         if self.last_will:
             raise WillAlreadySetError
         self.client.will_set(f"{plugin.get_topic()}/state", state, 0, False)
@@ -75,6 +86,7 @@ class MQTTDevice:
         for topic, sensor_class in self.entity_classes.items():
             if hasattr(sensor_class, "publish_state"):
                 sensor_class.publish_state()
+                logger.debug(f"Published state for {topic}")
 
     def on_message(self, client, userdata, msg):
         print("Message received-> " + msg.topic + " " + str(msg.payload))
@@ -89,23 +101,38 @@ class MQTTDevice:
 class Entity(ABC):
     name: ClassVar[str]
     domain: ClassVar[str]
+    _mqttdevice: MQTTDevice
 
-    def plugin_init(self, mqttdevice):
-        self._mqttdevice: MQTTDevice = mqttdevice
+    @classmethod
+    def register(cls, mqttdevice: MQTTDevice, *args, **kwargs):
+        instance = cls(*args, **kwargs)
+        mqttdevice.register_plugin(instance)
+        return instance
+
+    def initialize_plugin(self, mqttdevice: MQTTDevice):
+        self._mqttdevice = mqttdevice
+
+    @property
+    def mqttdevice(self) -> MQTTDevice:
+        try:
+            return self._mqttdevice
+        except AttributeError:
+            raise AttributeError("Plugin not initialized yet.")
 
     def publish_discovery(self):
         topic = self.get_topic()
-        self._mqttdevice.client.publish(
+        self.mqttdevice.client.publish(
             f"{topic}/config", json.dumps(self.get_publish_payload()), retain=True
         )
+        logger.debug(f"Published discovery for {topic}")
 
     def get_topic(self):
-        return f"{self._mqttdevice.get_discovery_prefix()}/{self.domain}/{self._mqttdevice.get_device_name()}_{self.name}"
+        return f"{self.mqttdevice.get_discovery_prefix()}/{self.domain}/{self.mqttdevice.get_device_name()}_{self.name}"
 
     def get_publish_payload(self):
         topic = self.get_topic()
         return {
-            "name": f"{self._mqttdevice.get_device_name()}_{self.name}",
+            "name": f"{self.mqttdevice.get_device_name()}_{self.name}",
             "state_topic": f"{topic}/state",
         }
 
@@ -132,7 +159,7 @@ class BinarySensor(EntityWithState, ABC):
 
     def publish_state(self):
         topic = self.get_topic()
-        self._mqttdevice.client.publish(
+        self.mqttdevice.client.publish(
             f"{topic}/state", "ON" if self.get_state() else "OFF", retain=True
         )
 
@@ -144,12 +171,12 @@ class Button(EntityWithMessage, ABC):
     def publish_discovery(self):
         super().publish_discovery()
         topic = self.get_topic()
-        self._mqttdevice.client.subscribe(f"{topic}/set")
+        self.mqttdevice.client.subscribe(f"{topic}/set")
 
     def get_publish_payload(self):
         topic = self.get_topic()
         return {
-            "name": f"{self._mqttdevice.get_device_name()}_{self.name}",
+            "name": f"{self.mqttdevice.get_device_name()}_{self.name}",
             "command_topic": f"{topic}/set",
         }
 
@@ -165,7 +192,11 @@ if __name__ == "__main__":
         type=argparse.FileType("r"),
         required=False,
     )
+    parser.add_argument('-v', '--verbose',
+                    action='store_true')
     args = parser.parse_args()
+    if args.verbose:
+        logger.setLevel(logging.DEBUG)
     config = yaml.safe_load(args.config)
     m = MQTTDevice(config)
     m.loop_forever()

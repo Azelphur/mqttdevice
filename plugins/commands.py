@@ -1,3 +1,4 @@
+from typing import Any
 from mqttdevice import Button, MQTTDevice
 import subprocess
 
@@ -11,7 +12,6 @@ class Plugin(Button):
         subprocess.Popen(self.command, shell=True)
 
 
-def setup(mqttdevice: MQTTDevice, config: any):
+def setup(mqttdevice: MQTTDevice, config: Any):
     for command in config:
-        plugin = Plugin(command)
-        mqttdevice.register_plugin(plugin)
+        Plugin.register(mqttdevice, command)
