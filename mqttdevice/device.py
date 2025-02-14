@@ -1,101 +1,110 @@
 from __future__ import annotations
 
+import asyncio
 import importlib
+import json
 import typing
-import paho.mqtt.client as mqtt
 import logging
 import sys
 import uuid
 from socket import gethostname
 
-from mqttdevice.exceptions import WillAlreadySetError
+import aiomqtt
+from caseconverter import snakecase, titlecase
+
+from mqttdevice.mqtt_object import MQTTConfig, MQTTObject
 
 
 if typing.TYPE_CHECKING:
     from mqttdevice.entities import Entity
-    from mqttdevice.plugins.commands import Plugin
 
-logger = logging.getLogger("mqttdevice")
-logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("mqttdevice.device")
 
 
-class MQTTDevice:
-    def __init__(self, config: dict):
-        logger.info("Starting MQTT Device")
+class Config(typing.TypedDict):
+    plugins: dict[str, typing.Any]
+    mqtt: MQTTConfig
 
+
+class Device(MQTTObject):
+    def __init__(self, config: Config):
         self.config = config
-        self.connected = False
-        self.last_will = False
-        self.entity_classes: dict[str, Entity] = dict()
-        self.client: mqtt.Client = mqtt.Client(self.get_device_name())
-        for plugin, plugin_config in config["plugins"].items():
+        super().__init__(config.get("mqtt", MQTTConfig()))
+
+        self.entities: dict[str, Entity] = dict()
+        for plugin_config in config["plugins"]:
+            plugin = plugin_config["plugin"]
             try:
-                plugin_module = importlib.import_module(f"plugins.{plugin}")
+                plugin_module = importlib.import_module(f"mqttdevice.plugins.{plugin}")
             except ModuleNotFoundError:
                 logger.error(f"No such plugin {plugin}")
                 sys.exit(1)
             plugin_module.setup(self, plugin_config)
-        self.client.username_pw_set(
-            self.config["mqtt_username"], self.config["mqtt_password"]
-        )
-        self.client.on_connect = self.on_connect
-        self.client.on_message = self.on_message
-        self.client.on_disconnect = self.on_disconnect
-        self.client.connect(
-            self.config["mqtt_host"], self.config.get("mqtt_port", 1883)
-        )
 
-    def register_plugin(self, instance: Plugin):
+    def register_plugin(self, instance: Entity) -> typing.Self:
         instance.initialize_plugin(self)
-        self.entity_classes[instance.get_topic()] = instance
-        logger.info(f"Registered plugin {instance.get_topic()}")
+        self.entities[instance.identifier] = instance
+        logger.info(f"Registered plugin {instance.identifier}")
+        return self
+    
+    @property
+    def polling_interval(self) -> int:
+        return int(self.config.get("polling_interval", 60))
 
-    def loop_forever(self):
-        logger.info("Starting loop")
-        self.client.loop_forever()
+    @property
+    def verbose_name(self) -> str:
+        return self.config.get("device_name", titlecase(gethostname()))
 
-    def will_set(self, plugin: Plugin, state):
-        if self.last_will:
-            raise WillAlreadySetError
-        self.client.will_set(f"{plugin.get_topic()}/state", state, 0, False)
-        self.last_will = True
+    @property
+    def name(self):
+        return snakecase(self.verbose_name)
+    
+    @property
+    def identifier(self) -> str:
+        return self.name
 
-    def on_connect(self, client, userdata, flags, rc):
-        self.connected = True
-        self.publish_discovery()
-        self.publish_state()
-
-    def on_disconnect(self, client, userdata, rc):
-        self.connected = False
-        self.publish_state()
-
-    def get_discovery_prefix(self):
-        return self.config.get("discovery_prefix", "homeassistant")
-
-    def get_device_name(self):
-        return self.config.get("device_name", gethostname())
-
-    def get_device_metadata(self):
+    @property
+    def device_metadata(self):
         return {
             "ids": [gethostname(), uuid.getnode()],
-            "name": self.get_device_name(),
+            "name": self.verbose_name,
         }
 
-    def publish_discovery(self):
-        for entity in self.entity_classes.values():
-            entity.publish_discovery()
+    def get_availability_state(self) -> bool:
+        return self.client._client.is_connected()
 
-    def publish_state(self):
-        for topic, sensor_class in self.entity_classes.items():
-            if hasattr(sensor_class, "publish_state"):
-                sensor_class.publish_state()
-                logger.debug(f"Published state for {topic}")
+    @property
+    def availability_topic(self):
+        return f"mqttdevice/{self.name}/availability"
 
-    def on_message(self, client, userdata, msg):
-        logger.info("Message received-> " + msg.topic + " " + str(msg.payload))
-        payload = msg.payload.decode("utf-8")
-        topic = msg.topic[:-4]
-        if topic not in self.entity_classes:
-            logger.error(f"{topic} not found")
-            return
-        self.entity_classes[topic].on_message(payload)
+    async def publish_availability_state(self, client: aiomqtt.Client | None = None):
+        client = client or self.client
+        payload = {
+            "state": "online" if self.get_availability_state() else "offline"
+        }
+        await client.publish(self.availability_topic, json.dumps(payload), retain=True)
+        self.logger.info(f"Published state for {self.identifier}: {payload}")
+
+    async def on_connect(self, client: aiomqtt.Client):
+        await self.publish_availability_state(client)
+        self.will_set(
+            self.availability_topic,
+            json.dumps({"state": "offline"}),
+            retain=True,
+        )
+
+    async def on_loop(self, client: aiomqtt.Client):
+        await self.publish_availability_state(client)
+
+    async def on_disconnect(self):
+        pass
+
+    async def loop(self):
+        print(f"Starting loop for {self.identifier}")
+        async with self.client as client:
+            await self.on_connect(client)
+            while True:
+                self.logger.debug(f"Running loop for {self.identifier}")
+                await asyncio.sleep(self.polling_interval)
+                self.logger.debug(f"Running loop for {self.identifier}")
+                await self.on_loop(client)

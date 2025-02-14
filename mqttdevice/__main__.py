@@ -1,13 +1,22 @@
 from __future__ import annotations
 
+import asyncio
 import logging
+from math import e
 import yaml
 
-from mqttdevice.device import MQTTDevice
+from mqttdevice.device import Device
 
 logger = logging.getLogger("mqttdevice")
 logging.basicConfig(level=logging.INFO)
 
+async def main(args):
+    config = yaml.safe_load(args.config)
+    device = Device(config)
+    async with asyncio.TaskGroup() as tg:
+        tg.create_task(device.loop())
+        for entity in device.entities.values():
+            tg.create_task(entity.loop())
 
 if __name__ == "__main__":
     import argparse
@@ -25,6 +34,6 @@ if __name__ == "__main__":
     if args.verbose:
         logger.setLevel(logging.DEBUG)
 
-    config = yaml.safe_load(args.config)
-    m = MQTTDevice(config)
-    m.loop_forever()
+    asyncio.run(main(args))
+
+    

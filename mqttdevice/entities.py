@@ -1,73 +1,126 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import Any, ClassVar
+import asyncio
+from enum import StrEnum
+from typing import Any, ClassVar, Self, TypedDict
 import json
 import typing
-import logging
 
+import aiomqtt
+from aiomqtt.client import Message
 from homeassistant.components.binary_sensor import BinarySensorDeviceClass
+
+from mqttdevice.mqtt_object import MQTTObject
 
 
 if typing.TYPE_CHECKING:
-    from mqttdevice.entities import MQTTDevice
-
-logger = logging.getLogger("mqttdevice")
-logging.basicConfig(level=logging.INFO)
+    from mqttdevice.device import Device
 
 
-class Entity(ABC):
-    name: ClassVar[str]
+class PluginConfig(TypedDict):
+    id: str
+    name: str | None
+    plugin: str
+    polling_interval: int | None
+
+
+class Entity(MQTTObject, ABC):
+    config: PluginConfig
     domain: ClassVar[str]
-    device_class: ClassVar[str | None] = None
+    device_class: ClassVar[StrEnum | None] = None
     unit_of_measurement: ClassVar[str | None] = None
 
-    _mqttdevice: MQTTDevice
+    _device: Device
 
-    @classmethod
-    def register(cls, mqttdevice: MQTTDevice, *args, **kwargs):
-        instance = cls(*args, **kwargs)
-        mqttdevice.register_plugin(instance)
-        return instance
-
-    def initialize_plugin(self, mqttdevice: MQTTDevice):
-        self._mqttdevice = mqttdevice
+    def __init__(self, device: Device, config: PluginConfig, *args, **kwargs):
+        self.config = config
+        device.register_plugin(self)
+        super().__init__(self.device._mqtt_config, *args, **kwargs)
 
     @property
-    def mqttdevice(self) -> MQTTDevice:
+    def id(self) -> str:
+        return self.config["id"].lower()
+
+    @property
+    def name(self) -> str | None:
+        return self.config.get("name")
+
+    @property
+    def identifier(self) -> str:
+        return f"{self.device.name}_{self.id}"
+
+    @property
+    def polling_interval(self) -> int:
+        return int(self.config.get("polling_interval", self.device.polling_interval))
+
+    def initialize_plugin(self, device: Device) -> Self:
+        self._device = device
+        return self
+
+    @property
+    def device(self) -> Device:
         try:
-            return self._mqttdevice
+            return self._device
         except AttributeError:
             raise AttributeError("Plugin not initialized yet.")
 
-    def publish_discovery(self):
-        topic = self.get_topic()
-        self.mqttdevice.client.publish(
-            f"{topic}/config", json.dumps(self.get_publish_payload()), retain=True
-        )
-        logger.debug(f"Published discovery for {topic}")
+    async def publish_discovery(self, client: aiomqtt.Client | None = None):
+        client = client or self.client
+        payload = self.get_discovery_payload()
+        self.logger.debug(f"Publishing discovery: {payload}")
+        await client.publish(self.discovery_topic, json.dumps(payload), retain=True)
+        self.logger.info("Published discovery")
 
-    def get_topic(self):
-        return f"{self.mqttdevice.get_discovery_prefix()}/{self.domain}/{self.mqttdevice.get_device_name()}_{self.name}"
+    @property
+    def discovery_topic(self):
+        return f"homeassistant/{self.domain}/{self.device.name}/{self.id}/config"
 
-    def get_publish_payload(self):
-        topic = self.get_topic()
-
+    def get_discovery_payload(self):
+        # Uses https://www.home-assistant.io/integrations/mqtt/#single-component-discovery-payload
         payload = {
-            "uniq_id": self.name,
-            "state_topic": f"{topic}/state",
-            "dev": self.mqttdevice.get_device_metadata(),
+            "availability": [
+                {
+                    "topic": f"mqttdevice/{self.device.name}/availability",
+                    "value_template": "{{ value_json.state }}",
+                }
+            ],
+            "availability_mode": "latest",
+            "unique_id": self.id,
+            "object_id": self.identifier,
+            "dev": self.device.device_metadata,
             "o": {
                 "name": "MQTTDevice",
                 "url": "https://github.com/Azelphur/mqttdevice",
             },
         }
+        if self.name:
+            payload["name"] = self.name
         if self.device_class:
-            payload["device_class"] = self.device_class
+            payload["device_class"] = self.device_class.value
         if self.unit_of_measurement:
             payload["unit_of_measurement"] = self.unit_of_measurement
-        logger.debug(f"Generated payload for {topic}: {payload}")
         return payload
+
+    async def on_connect(self, client: aiomqtt.Client):
+        await self.publish_discovery(client)
+
+    async def on_loop(self, client: aiomqtt.Client):
+        pass
+
+    async def on_disconnect(self, client: aiomqtt.Client):
+        pass
+
+    async def loop(self):
+        print(f"Starting loop")
+        async with self.client as client:
+            await self.on_connect(client)
+            while True:
+                self.logger.debug(f"Sleeping for {self.polling_interval} seconds")
+                await asyncio.sleep(self.polling_interval)
+                self.logger.debug(f"Running loop")
+                await self.on_loop(client)
+            await self.on_disconnect(client)
 
 
 class EntityWithState(Entity):
@@ -75,43 +128,72 @@ class EntityWithState(Entity):
     def get_state(self) -> bool:
         raise NotImplementedError
 
+    @property
+    def state_topic(self):
+        return f"mqttdevice/{self.identifier}/{self.device_class}"
+
+    def get_discovery_payload(self):
+        payload = super().get_discovery_payload()
+        payload["state_topic"] = self.state_topic
+        payload["value_template"] = self.value_template
+        return payload
+
+    @property
+    def value_template(self):
+        return f"{{{{ value_json.{self.device_class} }}}}"
+
     @abstractmethod
-    def publish_state(self) -> Any:
+    async def publish_state(self, client: aiomqtt.Client | None = None) -> Any:
         raise NotImplementedError
+
+    async def on_connect(self, client: aiomqtt.Client):
+        await super().on_connect(client)
+        await self.publish_state(client)
+
+    async def on_loop(self, client: aiomqtt.Client):
+        await super().on_loop(client)
+        await self.publish_state(client)
+
+    async def on_disconnect(self, client: aiomqtt.Client):
+        await super().on_disconnect(client)
+        await self.publish_state(client)
 
 
 class EntityWithMessage(Entity):
     @abstractmethod
-    def on_message(self, payload) -> Any:
-        raise NotImplementedError
+    async def on_message(self, message: Message) -> Any: ...
+
+    async def loop(self):
+        async with self.client as client:
+            await self.on_connect(client)
+            async for message in client.messages:
+                await self.on_message(message)
 
 
 class BinarySensor(EntityWithState, ABC):
-    name = None
     domain = "binary_sensor"
     device_class: ClassVar[BinarySensorDeviceClass]
 
-    def publish_state(self):
-        topic = self.get_topic()
-        payload = {"state": "ON" if self.get_state() else "OFF"}
-        self.mqttdevice.client.publish(
-            f"{topic}/state", json.dumps(payload), retain=True
-        )
-        logger.debug(f"Generated payload for {topic}: {payload}")
+    async def publish_state(self, client: aiomqtt.Client | None = None):
+        client = client or self.client
+        payload = {self.device_class.value: "ON" if self.get_state() else "OFF"}
+        await client.publish(self.state_topic, json.dumps(payload), retain=True)
+        self.logger.info(f"Published state: {payload}")
 
 
 class Button(EntityWithMessage, ABC):
-    name = None
     domain = "button"
 
-    def publish_discovery(self):
-        super().publish_discovery()
-        topic = self.get_topic()
-        self.mqttdevice.client.subscribe(f"{topic}/set")
+    @property
+    def set_topic(self):
+        return f"mqttdevice/{self.identifier}/set"
 
-    def get_publish_payload(self):
-        topic = self.get_topic()
-        return {
-            "name": f"{self.mqttdevice.get_device_name()}_{self.name}",
-            "command_topic": f"{topic}/set",
-        }
+    async def publish_discovery(self, client: aiomqtt.Client | None = None):
+        client = client or self.client
+        await super().publish_discovery(client)
+        await client.subscribe(self.set_topic)
+
+    def get_discovery_payload(self):
+        payload = super().get_discovery_payload()
+        payload["command_topic"] = self.set_topic
+        return payload
