@@ -1,5 +1,6 @@
 from typing import Any
-from mqttdevice import Button, MQTTDevice
+from mqttdevice import MQTTDevice
+from mqttdevice.entities import Button
 import subprocess
 
 
