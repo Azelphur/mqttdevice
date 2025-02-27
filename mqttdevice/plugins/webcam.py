@@ -19,6 +19,7 @@ class Plugin(BinarySensor):
 
     def get_discovery_payload(self):
         payload = super().get_discovery_payload()
+        payload["json_attributes"] = ["process"]
         payload["json_attributes_topic"] = self.state_topic
         payload["json_attributes_template"] = "{{ value_json.metadata }}"
         return payload
@@ -45,9 +46,9 @@ class Plugin(BinarySensor):
     async def publish_state(self, client: aiomqtt.Client | None = None) -> None:
         client = client or self.client
 
-        state, metadata = self.get_state()
+        state, process = self.get_state()
         device_class = (self.device_class.value if isinstance(self.device_class, StrEnum) else self.device_class) or "state"
-        payload = {device_class: self.format_state(state), "metadata": metadata}
+        payload = {device_class: self.format_state(state), "metadata": {"process":process}}
         await client.publish(self.state_topic, json.dumps(payload), retain=True)
         self.logger.info(f"Published state: {json.dumps(payload)}")
 
