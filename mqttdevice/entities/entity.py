@@ -131,7 +131,8 @@ class EntityWithState(Entity, ABC):
 
     @property
     def state_topic(self):
-        return f"mqttdevice/{self.identifier}/{self.device_class}"
+        device_class = (self.device_class.value if isinstance(self.device_class, StrEnum) else self.device_class) or "state"
+        return f"mqttdevice/{self.identifier}/{device_class}"
 
     def get_discovery_payload(self):
         payload = super().get_discovery_payload()
@@ -141,11 +142,13 @@ class EntityWithState(Entity, ABC):
 
     @property
     def value_template(self):
-        return f"{{{{ value_json.{self.device_class} }}}}"
+        device_class = (self.device_class.value if isinstance(self.device_class, StrEnum) else self.device_class) or "state"
+        return f"{{{{ value_json.{device_class} }}}}"
     
     async def publish_state(self, client: aiomqtt.Client | None = None) -> None:
         client = client or self.client
-        payload = {self.device_class.value: self.format_state(self.get_state())}
+        device_class = (self.device_class.value if isinstance(self.device_class, StrEnum) else self.device_class) or "state"
+        payload = {device_class: self.format_state(self.get_state())}
         await client.publish(self.state_topic, json.dumps(payload), retain=True)
         self.logger.info(f"Published state: {payload}")
 
