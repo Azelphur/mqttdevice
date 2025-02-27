@@ -1,4 +1,5 @@
 import subprocess
+
 from aiomqtt.client import Message
 
 from mqttdevice.device import Device

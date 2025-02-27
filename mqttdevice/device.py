@@ -3,9 +3,9 @@ from __future__ import annotations
 import asyncio
 import importlib
 import json
-import typing
 import logging
 import sys
+import typing
 import uuid
 from socket import gethostname
 
@@ -13,7 +13,6 @@ import aiomqtt
 from caseconverter import snakecase, titlecase
 
 from mqttdevice.mqtt_object import MQTTConfig, MQTTObject
-
 
 if typing.TYPE_CHECKING:
     from mqttdevice.entities import Entity
@@ -46,7 +45,7 @@ class Device(MQTTObject):
         self.entities[instance.identifier] = instance
         logger.info(f"Registered plugin {instance.identifier}")
         return self
-    
+
     @property
     def polling_interval(self) -> int:
         return int(self.config.get("polling_interval", 60))
@@ -58,7 +57,7 @@ class Device(MQTTObject):
     @property
     def name(self):
         return snakecase(self.verbose_name)
-    
+
     @property
     def identifier(self) -> str:
         return self.name
@@ -79,9 +78,7 @@ class Device(MQTTObject):
 
     async def publish_availability_state(self, client: aiomqtt.Client | None = None):
         client = client or self.client
-        payload = {
-            "state": "online" if self.get_availability_state() else "offline"
-        }
+        payload = {"state": "online" if self.get_availability_state() else "offline"}
         await client.publish(self.availability_topic, json.dumps(payload), retain=True)
         self.logger.info(f"Published state for {self.identifier}: {payload}")
 

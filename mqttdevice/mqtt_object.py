@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-from abc import ABC, abstractmethod
-from typing import Any, TypedDict
-import aiomqtt
 import logging
+from abc import ABC, abstractmethod
+from typing import TypedDict
 
+import aiomqtt
 from aiomqtt.client import PayloadType, Properties
 
 from mqttdevice.exceptions import WillAlreadySetError

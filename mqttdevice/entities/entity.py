@@ -1,28 +1,19 @@
 from __future__ import annotations
 
-from abc import ABC, abstractmethod
 import asyncio
-from enum import StrEnum
-from typing import Any, ClassVar, Self, TypedDict
 import json
-import typing
+from abc import ABC, abstractmethod
+from enum import StrEnum
+from typing import TYPE_CHECKING, Any, ClassVar, Self
 
 import aiomqtt
 from aiomqtt.client import Message
-from homeassistant.components.binary_sensor import BinarySensorDeviceClass
 
+from mqttdevice.entities.config import PluginConfig
 from mqttdevice.mqtt_object import MQTTObject
 
-
-if typing.TYPE_CHECKING:
+if TYPE_CHECKING:
     from mqttdevice.device import Device
-
-
-class PluginConfig(TypedDict):
-    id: str
-    name: str | None
-    plugin: str
-    polling_interval: int | None
 
 
 class Entity(MQTTObject, ABC):
@@ -112,18 +103,18 @@ class Entity(MQTTObject, ABC):
         pass
 
     async def loop(self):
-        print(f"Starting loop")
+        print("Starting loop")
         async with self.client as client:
             await self.on_connect(client)
             while True:
                 self.logger.debug(f"Sleeping for {self.polling_interval} seconds")
                 await asyncio.sleep(self.polling_interval)
-                self.logger.debug(f"Running loop")
+                self.logger.debug("Running loop")
                 await self.on_loop(client)
             await self.on_disconnect(client)
 
 
-class EntityWithState(Entity):
+class EntityWithState(Entity, ABC):
     @abstractmethod
     def get_state(self) -> bool:
         raise NotImplementedError
@@ -159,7 +150,7 @@ class EntityWithState(Entity):
         await self.publish_state(client)
 
 
-class EntityWithMessage(Entity):
+class EntityWithMessage(Entity, ABC):
     @abstractmethod
     async def on_message(self, message: Message) -> Any: ...
 
@@ -168,32 +159,3 @@ class EntityWithMessage(Entity):
             await self.on_connect(client)
             async for message in client.messages:
                 await self.on_message(message)
-
-
-class BinarySensor(EntityWithState, ABC):
-    domain = "binary_sensor"
-    device_class: ClassVar[BinarySensorDeviceClass]
-
-    async def publish_state(self, client: aiomqtt.Client | None = None):
-        client = client or self.client
-        payload = {self.device_class.value: "ON" if self.get_state() else "OFF"}
-        await client.publish(self.state_topic, json.dumps(payload), retain=True)
-        self.logger.info(f"Published state: {payload}")
-
-
-class Button(EntityWithMessage, ABC):
-    domain = "button"
-
-    @property
-    def set_topic(self):
-        return f"mqttdevice/{self.identifier}/set"
-
-    async def publish_discovery(self, client: aiomqtt.Client | None = None):
-        client = client or self.client
-        await super().publish_discovery(client)
-        await client.subscribe(self.set_topic)
-
-    def get_discovery_payload(self):
-        payload = super().get_discovery_payload()
-        payload["command_topic"] = self.set_topic
-        return payload

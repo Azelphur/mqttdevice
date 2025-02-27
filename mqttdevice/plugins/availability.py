@@ -3,6 +3,7 @@ from homeassistant.components.binary_sensor import BinarySensorDeviceClass
 from mqttdevice.device import Device
 from mqttdevice.entities import BinarySensor, PluginConfig
 
+
 class Plugin(BinarySensor):
     device_class = BinarySensorDeviceClass.CONNECTIVITY
 
