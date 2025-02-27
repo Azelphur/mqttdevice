@@ -17,10 +17,11 @@ if TYPE_CHECKING:
 
 
 class Entity(MQTTObject, ABC):
+    default_name: ClassVar[str | None] = None
     config: PluginConfig
     domain: ClassVar[str]
-    device_class: ClassVar[StrEnum | None] = None
-    unit_of_measurement: ClassVar[str | None] = None
+    device_class: ClassVar[StrEnum | str | None] = None
+    unit_of_measurement: ClassVar[StrEnum | str | None] = None
 
     _device: Device
 
@@ -35,7 +36,7 @@ class Entity(MQTTObject, ABC):
 
     @property
     def name(self) -> str | None:
-        return self.config.get("name")
+        return self.config.get("name", self.default_name)
 
     @property
     def identifier(self) -> str:
@@ -88,9 +89,15 @@ class Entity(MQTTObject, ABC):
         if self.name:
             payload["name"] = self.name
         if self.device_class:
-            payload["device_class"] = self.device_class.value
+            if isinstance(self.device_class, StrEnum):
+                payload["device_class"] = self.device_class.value
+            else:
+                payload["device_class"] = self.device_class
         if self.unit_of_measurement:
-            payload["unit_of_measurement"] = self.unit_of_measurement
+            if isinstance(self.unit_of_measurement, StrEnum):
+                payload["unit_of_measurement"] = self.unit_of_measurement.value
+            else:
+                payload["unit_of_measurement"] = self.unit_of_measurement
         return payload
 
     async def on_connect(self, client: aiomqtt.Client):
@@ -116,8 +123,11 @@ class Entity(MQTTObject, ABC):
 
 class EntityWithState(Entity, ABC):
     @abstractmethod
-    def get_state(self) -> bool:
+    def get_state(self) -> Any:
         raise NotImplementedError
+    
+    def format_state(self, state: Any) -> Any:
+        return state
 
     @property
     def state_topic(self):
@@ -132,10 +142,12 @@ class EntityWithState(Entity, ABC):
     @property
     def value_template(self):
         return f"{{{{ value_json.{self.device_class} }}}}"
-
-    @abstractmethod
-    async def publish_state(self, client: aiomqtt.Client | None = None) -> Any:
-        raise NotImplementedError
+    
+    async def publish_state(self, client: aiomqtt.Client | None = None) -> None:
+        client = client or self.client
+        payload = {self.device_class.value: self.format_state(self.get_state())}
+        await client.publish(self.state_topic, json.dumps(payload), retain=True)
+        self.logger.info(f"Published state: {payload}")
 
     async def on_connect(self, client: aiomqtt.Client):
         await super().on_connect(client)
