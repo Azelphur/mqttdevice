@@ -80,7 +80,7 @@ class Device(MQTTObject):
         client = client or self.client
         payload = {"state": "online" if self.get_availability_state() else "offline"}
         await client.publish(self.availability_topic, json.dumps(payload), retain=True)
-        self.logger.info(f"Published state for {self.identifier}: {payload}")
+        self.logger.info(f"Published state: {json.dumps(json.dumps(payload))}")
 
     async def on_connect(self, client: aiomqtt.Client):
         await self.publish_availability_state(client)

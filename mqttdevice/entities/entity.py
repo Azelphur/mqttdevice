@@ -150,7 +150,7 @@ class EntityWithState(Entity, ABC):
         device_class = (self.device_class.value if isinstance(self.device_class, StrEnum) else self.device_class) or "state"
         payload = {device_class: self.format_state(self.get_state())}
         await client.publish(self.state_topic, json.dumps(payload), retain=True)
-        self.logger.info(f"Published state: {payload}")
+        self.logger.info(f"Published state: {json.dumps(payload)}")
 
     async def on_connect(self, client: aiomqtt.Client):
         await super().on_connect(client)

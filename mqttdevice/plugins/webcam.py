@@ -49,7 +49,7 @@ class Plugin(BinarySensor):
         device_class = (self.device_class.value if isinstance(self.device_class, StrEnum) else self.device_class) or "state"
         payload = {device_class: self.format_state(state), "metadata": metadata}
         await client.publish(self.state_topic, json.dumps(payload), retain=True)
-        self.logger.info(f"Published state: {payload}")
+        self.logger.info(f"Published state: {json.dumps(payload)}")
 
 
 def setup(device: Device, config: PluginConfig):
