@@ -72,7 +72,7 @@ def setup(device: Device, config: PluginConfig):
         _config = Config(
             index=source["index"],
             metadata=source,
-            id=f"{config['id']}_{source['index']}",
+            id=f"{config['id']}_{source['name']}",
             name=source['description']
         )
         Plugin(device, _config)
