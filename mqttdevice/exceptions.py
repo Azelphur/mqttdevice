@@ -1,0 +1,2 @@
+class WillAlreadySetError(Exception):
+    pass

@@ -1,7 +1,8 @@
-mqtt_host: 192.168.0.10
-# mqtt_port: 1883 # (Optional, defaults to 1883)
-mqtt_username: username
-mqtt_password: password
+mqtt:
+  host: localhost
+  # port: 1883 # (Optional, defaults to 1883)
+  username: user
+  password: pass
 #discovery_prefix: homeassistant # (Optional)
 #device_name: mydevice # (Optional, defaults to hostname)
 plugins:
